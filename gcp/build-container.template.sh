@@ -7,6 +7,11 @@
 
 set -e
 
+# Run from the script's own directory so the relative paths below work even
+# when Terraform invokes this via local-exec from a remote root module
+# (local-exec's cwd is the root module dir, not this module's gcp/ dir).
+cd "$(dirname "$0")"
+
 # Check if required files exist
 if [ ! -f "cloudbuild-container.yaml" ] || [ ! -f "../Dockerfile" ]; then
 	echo "Error: This command must be executed in the gcp directory." >&2
