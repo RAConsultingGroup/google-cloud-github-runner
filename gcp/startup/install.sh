@@ -97,6 +97,11 @@ sudo apt-get install -y \
 sudo systemctl enable docker.service
 sudo systemctl start docker.service
 
+# Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
+# and workflows invoke it directly; actions/setup-node does not install yarn.
+echo "Installing Yarn..."
+sudo npm install -g yarn
+
 # Create runner user and add to docker und sudoers group
 echo "Creating runner user..."
 if ! id -u runner >/dev/null 2>&1; then
