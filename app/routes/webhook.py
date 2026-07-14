@@ -13,7 +13,13 @@ webhook_bp = Blueprint('webhook', __name__)
 
 
 @webhook_bp.route('/webhook', methods=['POST'])
-@limiter.limit("1000 per hour")  # Higher limit for high-traffic webhook endpoint
+# Only count rejected requests (bad signature/payload) against the limit:
+# deliveries are one-shot (GitHub does not retry webhooks), so throttling
+# signature-verified traffic silently loses workflow_job events — queued jobs
+# never get a runner and completed-job VMs are never deleted. Busy CI easily
+# exceeds a fixed hourly budget (each job costs ~2 deliveries), while abuse
+# without the webhook secret still burns the limit as before.
+@limiter.limit("1000 per hour", deduct_when=lambda response: response.status_code >= 400)
 def webhook():
     """Handle incoming GitHub webhook events."""
     # https://docs.github.com/en/webhooks/webhook-events-and-payloads
