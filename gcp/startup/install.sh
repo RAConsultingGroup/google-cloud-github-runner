@@ -81,6 +81,15 @@ for cmd in "${REQUIRED_COMMANDS[@]}"; do
 	fi
 done
 
+# Pull Docker Hub images through Google's pull-through cache. Hub answers manifest requests
+# with 500s and rate limits often enough to fail unrelated CI jobs; mirror.gcr.io serves the
+# same digests from inside GCP. A daemon mirror (rather than rewriting every FROM in every
+# repo) keeps Hub as the fallback - dockerd falls through to it when the mirror misses or
+# errors. Written before the install so the daemon reads it on its first start.
+echo "Configuring Docker Hub registry mirror..."
+sudo mkdir -p "/etc/docker"
+echo '{"registry-mirrors":["https://mirror.gcr.io"]}' | sudo tee "/etc/docker/daemon.json" >/dev/null
+
 # Add Docker repository and install
 echo "Installing Docker..."
 sudo curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" | sudo gpg --dearmor -o "/usr/share/keyrings/download.docker.com"
@@ -96,6 +105,11 @@ sudo apt-get install -y \
 # Enable and start Docker service
 sudo systemctl enable docker.service
 sudo systemctl start docker.service
+
+# Fail the bake rather than ship an image that silently pulls straight from Docker Hub.
+if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.gcr.io"; then
+	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
+fi
 
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.
