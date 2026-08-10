@@ -83,9 +83,18 @@ done
 
 # Pull Docker Hub images through Google's pull-through cache. Hub answers manifest requests
 # with 500s and rate limits often enough to fail unrelated CI jobs; mirror.gcr.io serves the
-# same digests from inside GCP. A daemon mirror (rather than rewriting every FROM in every
-# repo) keeps Hub as the fallback - dockerd falls through to it when the mirror misses or
-# errors. Written before the install so the daemon reads it on its first start.
+# same digests from inside GCP, and a daemon mirror covers every docker.io pull rather than
+# the Dockerfiles someone remembered to edit. Written before the install so the daemon reads
+# it on its first start.
+#
+# Two limits worth knowing before trusting this:
+#   - `docker pull` falls back to Hub when the mirror misses or errors, but a BuildKit-resolved
+#     `FROM` may not: moby/buildkit#1972 (open) reports a hard fail on a mirror 503 where the
+#     classic puller fell back. Image builds trade Hub outages for mirror.gcr.io outages, and
+#     mirror.gcr.io carries no SLA - keep build-level retry in the consuming repos.
+#   - Only the default `docker` buildx driver honours this. A `docker-container` builder (what
+#     docker/setup-buildx-action creates by default) ignores daemon.json and needs its own
+#     buildkitd.toml `[registry."docker.io"] mirrors`.
 echo "Configuring Docker Hub registry mirror..."
 sudo mkdir -p "/etc/docker"
 echo '{"registry-mirrors":["https://mirror.gcr.io"]}' | sudo tee "/etc/docker/daemon.json" >/dev/null
