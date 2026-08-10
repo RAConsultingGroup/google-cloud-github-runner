@@ -81,6 +81,24 @@ for cmd in "${REQUIRED_COMMANDS[@]}"; do
 	fi
 done
 
+# Pull Docker Hub images through Google's pull-through cache. Hub answers manifest requests
+# with 500s and rate limits often enough to fail unrelated CI jobs; mirror.gcr.io serves the
+# same digests from inside GCP, and a daemon mirror covers every docker.io pull rather than
+# the Dockerfiles someone remembered to edit. Written before the install so the daemon reads
+# it on its first start.
+#
+# Two limits worth knowing before trusting this:
+#   - `docker pull` falls back to Hub when the mirror misses or errors, but a BuildKit-resolved
+#     `FROM` may not: moby/buildkit#1972 (open) reports a hard fail on a mirror 503 where the
+#     classic puller fell back. Image builds trade Hub outages for mirror.gcr.io outages, and
+#     mirror.gcr.io carries no SLA - keep build-level retry in the consuming repos.
+#   - Only the default `docker` buildx driver honours this. A `docker-container` builder (what
+#     docker/setup-buildx-action creates by default) ignores daemon.json and needs its own
+#     buildkitd.toml `[registry."docker.io"] mirrors`.
+echo "Configuring Docker Hub registry mirror..."
+sudo mkdir -p "/etc/docker"
+echo '{"registry-mirrors":["https://mirror.gcr.io"]}' | sudo tee "/etc/docker/daemon.json" >/dev/null
+
 # Add Docker repository and install
 echo "Installing Docker..."
 sudo curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" | sudo gpg --dearmor -o "/usr/share/keyrings/download.docker.com"
@@ -96,6 +114,11 @@ sudo apt-get install -y \
 # Enable and start Docker service
 sudo systemctl enable docker.service
 sudo systemctl start docker.service
+
+# Fail the bake rather than ship an image that silently pulls straight from Docker Hub.
+if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.gcr.io"; then
+	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
+fi
 
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.
