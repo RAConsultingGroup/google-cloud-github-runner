@@ -6,6 +6,9 @@
 
 set -e
 
+# 45 minutes: a clean bake takes a few minutes, so this only fires on a wedged one.
+MAX_WAIT_SECONDS=2700
+
 TEMP_VM_NAME="${image_name}-builder-$(date +%s)"
 DISK_NAME="ssd-${image_name}-builder-$(date +%s)"
 
@@ -43,19 +46,36 @@ echo ""
 echo "[2/4] Waiting for VM to terminate (startup script execution)..."
 echo "This may take several minutes depending on the startup script..."
 
+# The startup script shuts the VM down on its last line, so TERMINATED means it finished.
+# A failure exits without shutting down - hence the timeout: without it a failed bake left
+# this loop printing RUNNING forever, terraform apply never returned, and killing it leaked
+# the builder VM and its disk. Deliberately no image is created on this path: a half-installed
+# boot disk must never become the image the whole fleet boots from.
+WAITED=0
 while true; do
 	STATUS=$(gcloud compute instances describe "$TEMP_VM_NAME" \
 		--project="${project_id}" \
 		--zone="${zone}" \
 		--format="get(status)" --quiet 2>/dev/null || echo "NOTFOUND")
-	
+
 	if [ "$STATUS" = "TERMINATED" ]; then
 		echo "VM has terminated successfully"
 		break
 	fi
-	
+
+	if [ "$WAITED" -ge "$MAX_WAIT_SECONDS" ]; then
+		echo "Startup script did not finish within $MAX_WAIT_SECONDS seconds (status: $STATUS)." >&2
+		echo "Check the serial console: gcloud compute instances get-serial-port-output $TEMP_VM_NAME --zone=${zone} --project=${project_id}" >&2
+		gcloud compute instances delete "$TEMP_VM_NAME" \
+			--project="${project_id}" \
+			--zone="${zone}" \
+			--quiet || echo "Could not delete $TEMP_VM_NAME - remove it and disk $DISK_NAME by hand" >&2
+		exit 1
+	fi
+
 	echo "Current status: $STATUS - waiting 10 seconds..."
 	sleep 10
+	WAITED=$((WAITED + 10))
 done
 
 echo ""
