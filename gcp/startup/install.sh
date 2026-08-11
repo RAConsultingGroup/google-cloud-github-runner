@@ -25,6 +25,21 @@ set -euo pipefail
 # Set default GitHub Actions Runner installation directory
 readonly MY_RUNNER_DIR="/actions-runner"
 
+# Pinned so a rebake reproduces the same toolchain. The image bake is triggered by this
+# file's hash (see outputs.tf), so any edit here rebakes on the next apply - with floating
+# versions that apply would also move Docker, yarn and the runner under the whole fleet,
+# and whoever ran an unrelated apply would own the upgrade.
+# Bump deliberately, in a PR of its own:
+#   apt-cache madison docker-ce            (or the Packages index for the target release)
+#   npm view yarn versions
+#   https://github.com/actions/runner/releases
+readonly MY_DOCKER_VERSION="5:29.7.2-1~ubuntu.24.04~noble"
+readonly MY_CONTAINERD_VERSION="2.3.3-1~ubuntu.24.04~noble"
+readonly MY_BUILDX_VERSION="0.36.1-1~ubuntu.24.04~noble"
+readonly MY_COMPOSE_VERSION="5.4.0-1~ubuntu.24.04~noble"
+readonly MY_YARN_VERSION="1.22.22"
+readonly MY_RUNNER_VERSION="2.336.0"
+
 # Prevent interactive prompts during package installation
 export DEBIAN_FRONTEND=noninteractive
 
@@ -105,11 +120,11 @@ sudo curl -fsSL "https://download.docker.com/linux/ubuntu/gpg" | sudo gpg --dear
 echo "deb [signed-by=/usr/share/keyrings/download.docker.com] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee "/etc/apt/sources.list.d/docker.list" >/dev/null
 sudo apt-get update -yq
 sudo apt-get install -y \
-	docker-ce \
-	docker-ce-cli \
-	containerd.io \
-	docker-buildx-plugin \
-	docker-compose-plugin
+	docker-ce="$MY_DOCKER_VERSION" \
+	docker-ce-cli="$MY_DOCKER_VERSION" \
+	containerd.io="$MY_CONTAINERD_VERSION" \
+	docker-buildx-plugin="$MY_BUILDX_VERSION" \
+	docker-compose-plugin="$MY_COMPOSE_VERSION"
 
 # Enable and start Docker service
 sudo systemctl enable docker.service
@@ -123,7 +138,7 @@ fi
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.
 echo "Installing Yarn..."
-sudo npm install -g yarn
+sudo npm install -g "yarn@$MY_YARN_VERSION"
 
 # Create runner user and add to docker und sudoers group
 echo "Creating runner user..."
@@ -134,10 +149,6 @@ sudo usermod -aG docker,google-sudoers runner
 
 # Install GitHub Actions Runner
 echo "Installing GitHub Actions Runner..."
-MY_RUNNER_VERSION=$(curl -fsSL "https://api.github.com/repos/actions/runner/releases/latest" | jq -r '.tag_name' | sed 's/^v//')
-if [[ -z "$MY_RUNNER_VERSION" || "$MY_RUNNER_VERSION" == "null" ]]; then
-	exit_with_failure "Could not retrieve the latest GitHub Actions Runner version"
-fi
 echo "Installing GitHub Actions Runner version: v${MY_RUNNER_VERSION}"
 
 # Download and extract runner

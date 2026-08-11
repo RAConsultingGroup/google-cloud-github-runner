@@ -86,6 +86,11 @@ resource "null_resource" "build-github-runners-images" {
 
   triggers = {
     script_hash = sha256(each.value.content)
+    # The bake runs whatever startup/install.sh the builder VM downloads, so hash that too.
+    # Without it, editing install.sh left the trigger unchanged: a plain apply reported
+    # success while the fleet kept booting the old image, and picking the change up needed a
+    # manual -replace nobody remembered to run.
+    startup_script_hash = filesha256("${path.module}/startup/install.sh")
   }
 
   provisioner "local-exec" {
