@@ -135,31 +135,13 @@ if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.g
 	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
 fi
 
-# Pre-pull the images CI reaches for on nearly every job. Runners are one-job-and-
-# destroyed, so without this every job re-downloads the same hundreds of MB: no local
-# cache ever survives. Baked images are served from the local store, which costs no
-# registry round-trip and no Cloud NAT egress.
-#
-# Deliberately non-fatal. A prewarm is a cache, not a correctness requirement: if a pull
-# fails the image is still perfectly usable and the job just fetches it at runtime, so a
-# registry hiccup must not block a fleet-wide image update. The list is a bake-time
-# snapshot and is allowed to drift from what CI actually uses - stale means slower, never
-# broken. ScaleraDjango has a check that reports drift.
-PREWARM_IMAGES=$(curl -sf --connect-timeout 2 --max-time 10 -H "Metadata-Flavor: Google" \
-	"http://metadata.google.internal/computeMetadata/v1/instance/attributes/prewarm-images" || true)
-if [ -n "$PREWARM_IMAGES" ]; then
-	echo "Pre-pulling images: $PREWARM_IMAGES"
-	for image in $PREWARM_IMAGES; do
-		if sudo docker pull "$image"; then
-			echo "  pre-pulled $image"
-		else
-			echo "  WARNING: could not pre-pull $image - jobs will fetch it at runtime"
-		fi
-	done
-	sudo docker images
-else
-	echo "No prewarm images requested"
-fi
+# Pre-pull what CI needs on nearly every job: runners are one-job-and-destroyed, so no
+# image cache survives between jobs. Non-fatal by design - a missed image is fetched at
+# runtime, and a registry hiccup must not block a fleet-wide image update.
+for image in $(curl -sf --connect-timeout 2 --max-time 10 -H "Metadata-Flavor: Google" \
+	"http://metadata.google.internal/computeMetadata/v1/instance/attributes/prewarm-images" || true); do
+	sudo docker pull "$image" || echo "WARNING: could not pre-pull $image"
+done
 
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.

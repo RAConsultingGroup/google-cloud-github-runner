@@ -125,9 +125,8 @@ variable "github_runners_prewarm_images" {
   default     = []
 
   validation {
-    # Space and comma are metadata separators. The rest of the restriction keeps shell
-    # metacharacters out: the list is rendered into a double-quoted argument in the
-    # generated bake script, where a `$(...)` would otherwise be evaluated.
+    # Space and comma separate metadata; the rest keeps shell metacharacters out of the
+    # generated bake script, where the list is interpolated into a gcloud argument.
     condition     = alltrue([for i in var.github_runners_prewarm_images : can(regex("^[A-Za-z0-9][A-Za-z0-9._/:@-]*$", i))])
     error_message = "Prewarm image references may only contain letters, digits and . _ / : @ - and must start with a letter or digit."
   }

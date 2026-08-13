@@ -21,8 +21,8 @@ echo "Temporary VM: $TEMP_VM_NAME"
 echo ""
 
 # Step 1: Create GCE VM with startup script from GCS
-# gcloud splits --metadata on commas, so prewarm-images is space-separated.
 echo "[1/4] Creating temporary VM instance..."
+# gcloud splits --metadata on commas, so prewarm-images is space-separated.
 gcloud compute instances create "$TEMP_VM_NAME" \
 	--project="${project_id}" \
 	--zone="${zone}" \
@@ -33,7 +33,7 @@ gcloud compute instances create "$TEMP_VM_NAME" \
 	--provisioning-model="STANDARD" \
 	--service-account="${service_account}" \
 	--scopes="https://www.googleapis.com/auth/cloud-platform" \
-	--create-disk="auto-delete=yes,boot=yes,name=$DISK_NAME,image=${image_family},mode=rw,type=${disk_type},size=${disk_size},provisioned-iops=${disk_provisioned_iops},provisioned-throughput=${disk_provisioned_throughput}" \
+	--create-disk="auto-delete=yes,boot=yes,name=$DISK_NAME,image=${image_family},mode=rw,type=${disk_type},size=10,provisioned-iops=${disk_provisioned_iops},provisioned-throughput=${disk_provisioned_throughput}" \
 	--no-shielded-secure-boot \
 	--shielded-vtpm \
 	--shielded-integrity-monitoring \
