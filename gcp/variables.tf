@@ -120,13 +120,16 @@ variable "github_runners_max_run_duration" {
 }
 
 variable "github_runners_prewarm_images" {
-  description = "Container images baked into the runner VM image so jobs find them in the local store instead of pulling them. Space-joined into VM metadata, so entries must not contain spaces."
+  description = "Container images baked into the runner VM image so jobs find them in the local store instead of pulling them. Space-joined into VM metadata and rendered into the bake script, so entries are restricted to the image-reference charset."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = alltrue([for i in var.github_runners_prewarm_images : !can(regex("[[:space:],]", i))])
-    error_message = "Prewarm image references must not contain spaces or commas: both are metadata separators."
+    # Space and comma are metadata separators. The rest of the restriction keeps shell
+    # metacharacters out: the list is rendered into a double-quoted argument in the
+    # generated bake script, where a `$(...)` would otherwise be evaluated.
+    condition     = alltrue([for i in var.github_runners_prewarm_images : can(regex("^[A-Za-z0-9][A-Za-z0-9._/:@-]*$", i))])
+    error_message = "Prewarm image references may only contain letters, digits and . _ / : @ - and must start with a letter or digit."
   }
 }
 

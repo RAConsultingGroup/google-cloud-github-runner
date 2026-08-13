@@ -28,7 +28,7 @@ gcloud compute instances create "$TEMP_VM_NAME" \
 	--zone="${zone}" \
 	--machine-type="${machine_type}" \
 	--network-interface="stack-type=IPV4_ONLY,subnet=${subnet},no-address" \
-	--metadata="enable-oslogin=true,startup-script-url=${startup_script_gcs},prewarm-images=${prewarm_images}" \
+	--metadata='enable-oslogin=true,startup-script-url=${startup_script_gcs},prewarm-images=${prewarm_images}' \
 	--maintenance-policy="MIGRATE" \
 	--provisioning-model="STANDARD" \
 	--service-account="${service_account}" \

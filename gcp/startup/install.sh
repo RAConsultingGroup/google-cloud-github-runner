@@ -145,7 +145,7 @@ fi
 # registry hiccup must not block a fleet-wide image update. The list is a bake-time
 # snapshot and is allowed to drift from what CI actually uses - stale means slower, never
 # broken. ScaleraDjango has a check that reports drift.
-PREWARM_IMAGES=$(curl -sf -H "Metadata-Flavor: Google" \
+PREWARM_IMAGES=$(curl -sf --connect-timeout 2 --max-time 10 -H "Metadata-Flavor: Google" \
 	"http://metadata.google.internal/computeMetadata/v1/instance/attributes/prewarm-images" || true)
 if [ -n "$PREWARM_IMAGES" ]; then
 	echo "Pre-pulling images: $PREWARM_IMAGES"
