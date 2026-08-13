@@ -20,6 +20,7 @@ module "github-runners-vm-templates" {
   network_interfaces = [{
     network    = module.vpc-github-runners.self_link
     subnetwork = module.vpc-github-runners.subnet_self_links["${var.region}/subnet-github-runners-${local.region_shortnames[var.region]}"]
+    nat        = var.github_runners_external_ip
   }]
 
   boot_disk = {
@@ -34,6 +35,7 @@ module "github-runners-vm-templates" {
   }
 
   options = {
+    spot               = var.github_runners_spot
     termination_action = "DELETE"
     # https://docs.github.com/en/actions/reference/limits#existing-system-limits
     max_run_duration = {
