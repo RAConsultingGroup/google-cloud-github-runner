@@ -135,6 +135,32 @@ if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.g
 	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
 fi
 
+# Pre-pull the images CI reaches for on nearly every job. Runners are one-job-and-
+# destroyed, so without this every job re-downloads the same hundreds of MB: no local
+# cache ever survives. Baked images are served from the local store, which costs no
+# registry round-trip and no Cloud NAT egress.
+#
+# Deliberately non-fatal. A prewarm is a cache, not a correctness requirement: if a pull
+# fails the image is still perfectly usable and the job just fetches it at runtime, so a
+# registry hiccup must not block a fleet-wide image update. The list is a bake-time
+# snapshot and is allowed to drift from what CI actually uses - stale means slower, never
+# broken. ScaleraDjango has a check that reports drift.
+PREWARM_IMAGES=$(curl -sf -H "Metadata-Flavor: Google" \
+	"http://metadata.google.internal/computeMetadata/v1/instance/attributes/prewarm-images" || true)
+if [ -n "$PREWARM_IMAGES" ]; then
+	echo "Pre-pulling images: $PREWARM_IMAGES"
+	for image in $PREWARM_IMAGES; do
+		if sudo docker pull "$image"; then
+			echo "  pre-pulled $image"
+		else
+			echo "  WARNING: could not pre-pull $image - jobs will fetch it at runtime"
+		fi
+	done
+	sudo docker images
+else
+	echo "No prewarm images requested"
+fi
+
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.
 echo "Installing Yarn..."

@@ -73,6 +73,7 @@ resource "local_file" "github-runners-images" {
     disk_size                   = can(regex("arm64", each.value)) ? var.github_runners_default_type["arm64"].disk_size : var.github_runners_default_type["amd64"].disk_size
     disk_provisioned_iops       = can(regex("arm64", each.value)) ? var.github_runners_default_type["arm64"].disk_provisioned_iops : var.github_runners_default_type["amd64"].disk_provisioned_iops
     disk_provisioned_throughput = can(regex("arm64", each.value)) ? var.github_runners_default_type["arm64"].disk_provisioned_throughput : var.github_runners_default_type["amd64"].disk_provisioned_throughput
+    prewarm_images              = join(" ", var.github_runners_prewarm_images)
     zone                        = "${var.region}-${var.zone}"
     region                      = var.region
     project_id                  = module.project.project_id
