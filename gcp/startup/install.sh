@@ -135,6 +135,14 @@ if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.g
 	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
 fi
 
+# Pre-pull what CI needs on nearly every job: runners are one-job-and-destroyed, so no
+# image cache survives between jobs. Non-fatal by design - a missed image is fetched at
+# runtime, and a registry hiccup must not block a fleet-wide image update.
+for image in $(curl -sf --connect-timeout 2 --max-time 10 -H "Metadata-Flavor: Google" \
+	"http://metadata.google.internal/computeMetadata/v1/instance/attributes/prewarm-images" || true); do
+	sudo docker pull "$image" || echo "WARNING: could not pre-pull $image"
+done
+
 # Install Yarn (classic) globally. GitHub-hosted runner images preinstall it
 # and workflows invoke it directly; actions/setup-node does not install yarn.
 echo "Installing Yarn..."

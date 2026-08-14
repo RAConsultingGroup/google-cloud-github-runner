@@ -119,6 +119,19 @@ variable "github_runners_max_run_duration" {
   }
 }
 
+variable "github_runners_prewarm_images" {
+  description = "Container images baked into the runner VM image so jobs find them in the local store instead of pulling them. Space-joined into VM metadata and rendered into the bake script, so entries are restricted to the image-reference charset."
+  type        = list(string)
+  default     = []
+
+  validation {
+    # Space and comma separate metadata; the rest keeps shell metacharacters out of the
+    # generated bake script, where the list is interpolated into a gcloud argument.
+    condition     = alltrue([for i in var.github_runners_prewarm_images : can(regex("^[A-Za-z0-9][A-Za-z0-9._/:@-]*$", i))])
+    error_message = "Prewarm image references may only contain letters, digits and . _ / : @ - and must start with a letter or digit."
+  }
+}
+
 # Map of default VM images for GitHub Actions Runners by architecture
 variable "github_runners_default_image" {
   description = "Default GitHub Actions Runners images (family images) for different CPU architectures"

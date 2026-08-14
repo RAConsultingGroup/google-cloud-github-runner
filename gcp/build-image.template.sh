@@ -22,12 +22,13 @@ echo ""
 
 # Step 1: Create GCE VM with startup script from GCS
 echo "[1/4] Creating temporary VM instance..."
+# gcloud splits --metadata on commas, so prewarm-images is space-separated.
 gcloud compute instances create "$TEMP_VM_NAME" \
 	--project="${project_id}" \
 	--zone="${zone}" \
 	--machine-type="${machine_type}" \
 	--network-interface="stack-type=IPV4_ONLY,subnet=${subnet},no-address" \
-	--metadata="enable-oslogin=true,startup-script-url=${startup_script_gcs}" \
+	--metadata='enable-oslogin=true,startup-script-url=${startup_script_gcs},prewarm-images=${prewarm_images}' \
 	--maintenance-policy="MIGRATE" \
 	--provisioning-model="STANDARD" \
 	--service-account="${service_account}" \
