@@ -132,6 +132,26 @@ variable "github_runners_prewarm_images" {
   }
 }
 
+# Without an external IP all runner internet traffic (package downloads, image
+# pulls) flows through Cloud NAT, which bills a per-GB data processing fee on
+# both directions. With an external IP the same downloads are free ingress and
+# the NAT fee disappears; inbound stays blocked by the VPC firewall, which only
+# allows SSH via IAP.
+variable "github_runners_external_ip" {
+  description = "Attach an ephemeral external IP to GitHub Actions runner VMs so internet traffic bypasses Cloud NAT and its per-GB data processing fee"
+  type        = bool
+  default     = false
+}
+
+# Spot VMs are 60-91% cheaper than on-demand, but Compute Engine may preempt
+# them, which fails the GitHub Actions job running on the VM. Acceptable for
+# CI jobs that can be re-run.
+variable "github_runners_spot" {
+  description = "Provision GitHub Actions runner VMs as Spot VMs (cheaper, may be preempted mid-job)"
+  type        = bool
+  default     = false
+}
+
 # Map of default VM images for GitHub Actions Runners by architecture
 variable "github_runners_default_image" {
   description = "Default GitHub Actions Runners images (family images) for different CPU architectures"
