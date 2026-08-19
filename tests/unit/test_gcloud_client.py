@@ -9,6 +9,7 @@ def mock_env_vars(monkeypatch):
     """Set up mock environment variables for GCloud client."""
     monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
     monkeypatch.setenv('GOOGLE_CLOUD_ZONE', 'us-central1-a')
+    monkeypatch.delenv('GOOGLE_CLOUD_ZONES', raising=False)
 
 
 @pytest.fixture
@@ -244,6 +245,157 @@ class TestGCloudClient:
 
         assert result is None
         mock_instance_client.insert.assert_not_called()
+
+
+class TestGCloudClientMultiZone:
+    """Tests for spreading runner VMs across multiple zones via GOOGLE_CLOUD_ZONES."""
+
+    @pytest.fixture
+    def mock_multi_zone_env(self, monkeypatch):
+        """Configure three zones via GOOGLE_CLOUD_ZONES."""
+        monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
+        monkeypatch.setenv('GOOGLE_CLOUD_ZONE', 'us-central1-a')
+        monkeypatch.setenv('GOOGLE_CLOUD_ZONES', 'europe-west10-a, europe-west10-b,europe-west10-c')
+
+    def _mock_template(self, mock_compute):
+        """Wire a matching regional instance template into the mocked compute client."""
+        mock_templates_client = MagicMock()
+        mock_template = MagicMock()
+        mock_template.name = 'gcp-ubuntu-24-04-12345678901234'
+        mock_template.self_link = ('https://www.googleapis.com/compute/v1/projects/test-project/regions/europe-west10/'
+                                   'instanceTemplates/gcp-ubuntu-24-04-12345678901234')
+        mock_templates_client.list.return_value = [mock_template]
+        mock_compute.RegionInstanceTemplatesClient.return_value = mock_templates_client
+
+    def test_init_parses_zone_list(self, mock_multi_zone_env, mock_compute_clients, mock_gcloud_auth):
+        """GOOGLE_CLOUD_ZONES overrides the single zone and derives the region from its first entry."""
+        client = GCloudClient()
+
+        assert client.zones == ['europe-west10-a', 'europe-west10-b', 'europe-west10-c']
+        assert client.region == 'europe-west10'
+
+    def test_init_without_zone_list_keeps_single_zone(self, mock_env_vars, mock_compute_clients, mock_gcloud_auth):
+        """Without GOOGLE_CLOUD_ZONES the client behaves exactly as before."""
+        client = GCloudClient()
+
+        assert client.zones == ['us-central1-a']
+        assert client.region == 'us-central1'
+
+    def test_init_warns_on_cross_region_zone(self, monkeypatch, mock_compute_clients, mock_gcloud_auth, caplog):
+        """A zone outside the first zone's region is flagged, since templates are regional."""
+        monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
+        monkeypatch.setenv('GOOGLE_CLOUD_ZONES', 'europe-west10-a,europe-west6-b')
+
+        with caplog.at_level(logging.WARNING, logger='app.clients.gcloud_client'):
+            GCloudClient()
+
+        assert any('europe-west6-b' in r.message for r in caplog.records)
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_create_runner_instance_uses_picked_zone(self, mock_compute, mock_multi_zone_env):
+        """The instance is inserted into the zone picked from the configured list."""
+        self._mock_template(mock_compute)
+        mock_instance_client = MagicMock()
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        with patch('app.clients.gcloud_client.random.choice', return_value='europe-west10-b') as mock_choice:
+            client = GCloudClient()
+            client.create_runner_instance(
+                'fake-token-12345678',
+                'https://github.com/owner/repo',
+                'gcp-ubuntu-24.04'
+            )
+
+        mock_choice.assert_called_once_with(['europe-west10-a', 'europe-west10-b', 'europe-west10-c'])
+        assert mock_compute.InsertInstanceRequest.call_args.kwargs['zone'] == 'europe-west10-b'
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_create_runner_instances_spread_across_zones(self, mock_compute, mock_multi_zone_env):
+        """Repeated creations land in more than one of the configured zones."""
+        self._mock_template(mock_compute)
+        mock_instance_client = MagicMock()
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        client = GCloudClient()
+        for _ in range(50):
+            client.create_runner_instance(
+                'fake-token-12345678',
+                'https://github.com/owner/repo',
+                'gcp-ubuntu-24.04'
+            )
+
+        used_zones = {call.kwargs['zone'] for call in mock_compute.InsertInstanceRequest.call_args_list}
+        assert used_zones <= {'europe-west10-a', 'europe-west10-b', 'europe-west10-c'}
+        assert len(used_zones) > 1
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_delete_runner_instance_locates_zone(self, mock_compute, mock_multi_zone_env):
+        """With multiple zones, the instance's actual zone is looked up before deletion."""
+        mock_instance_client = MagicMock()
+        mock_instance_client.aggregated_list.return_value = [
+            ('zones/europe-west10-a', MagicMock(instances=[])),
+            ('zones/europe-west10-c', MagicMock(instances=[MagicMock()])),
+        ]
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        client = GCloudClient()
+        client.delete_runner_instance('gcp-runner-12345')
+
+        mock_instance_client.delete.assert_called_once_with(
+            project='test-project',
+            zone='europe-west10-c',
+            instance='gcp-runner-12345'
+        )
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_delete_runner_instance_finds_vm_in_unconfigured_zone(self, mock_compute, mock_multi_zone_env):
+        """A VM created before a zone/region change is still found and deleted."""
+        mock_instance_client = MagicMock()
+        mock_instance_client.aggregated_list.return_value = [
+            ('zones/europe-west6-b', MagicMock(instances=[MagicMock()])),
+        ]
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        client = GCloudClient()
+        client.delete_runner_instance('gcp-runner-12345')
+
+        mock_instance_client.delete.assert_called_once_with(
+            project='test-project',
+            zone='europe-west6-b',
+            instance='gcp-runner-12345'
+        )
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_delete_runner_instance_missing_everywhere_skips(self, mock_compute, mock_multi_zone_env, caplog):
+        """An already-deleted VM (e.g. after Spot preemption) is skipped without an error."""
+        mock_instance_client = MagicMock()
+        mock_instance_client.aggregated_list.return_value = [
+            ('zones/europe-west10-a', MagicMock(instances=[])),
+        ]
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        client = GCloudClient()
+        with caplog.at_level(logging.WARNING, logger='app.clients.gcloud_client'):
+            client.delete_runner_instance('gcp-runner-12345', delivery_id='gce-missing-delivery-001')
+
+        mock_instance_client.delete.assert_not_called()
+        assert any('gce-missing-delivery-001' in r.message for r in caplog.records)
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_delete_runner_instance_single_zone_skips_lookup(self, mock_compute, mock_env_vars):
+        """Without GOOGLE_CLOUD_ZONES deletion goes straight to the configured zone."""
+        mock_instance_client = MagicMock()
+        mock_compute.InstancesClient.return_value = mock_instance_client
+
+        client = GCloudClient()
+        client.delete_runner_instance('gcp-runner-12345')
+
+        mock_instance_client.aggregated_list.assert_not_called()
+        mock_instance_client.delete.assert_called_once_with(
+            project='test-project',
+            zone='us-central1-a',
+            instance='gcp-runner-12345'
+        )
 
 
 class TestGCloudClientDeliveryIdLogging:

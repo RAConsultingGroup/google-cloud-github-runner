@@ -10,6 +10,11 @@ data "google_artifact_registry_docker_image" "container-image-github-runners-man
   ]
 }
 
+locals {
+  # Full zone names the manager spreads runner VMs across; falls back to the single var.zone.
+  github_runner_zones = length(var.zones) > 0 ? [for z in var.zones : "${var.region}-${z}"] : ["${var.region}-${var.zone}"]
+}
+
 # Deploy the GitHub Actions Runners manager service on Cloud Run
 # https://github.com/GoogleCloudPlatform/cloud-foundation-fabric/blob/v53.0.0/modules/cloud-run-v2/README.md
 module "cloud_run_github_runners_manager" {
@@ -31,6 +36,7 @@ module "cloud_run_github_runners_manager" {
       env = {
         GOOGLE_CLOUD_PROJECT = var.project_id
         GOOGLE_CLOUD_ZONE    = "${var.region}-${var.zone}"
+        GOOGLE_CLOUD_ZONES   = join(",", local.github_runner_zones)
         GITHUB_RUNNER_GROUP  = var.github_runner_group
       }
       env_from_key = {

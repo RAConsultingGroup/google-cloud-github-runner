@@ -60,6 +60,27 @@ variable "zone" {
   }
 }
 
+# Zone suffixes for runner VMs. Empty keeps the single-zone behavior of var.zone.
+# Multiple zones spread runner VMs so a Spot capacity crunch in one zone only
+# affects a fraction of jobs. All zones are within var.region (instance
+# templates are regional).
+variable "zones" {
+  description = "Google Cloud zone suffixes to spread GitHub Actions runner VMs across; empty uses var.zone only"
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for z in var.zones : contains(["a", "b", "c", "d", "e", "f"], z)])
+    error_message = "Zone suffixes must be one of: a, b, c, d, e, f."
+  }
+
+  validation {
+    condition     = length(var.zones) == length(distinct(var.zones))
+    error_message = "Zone suffixes must be unique."
+  }
+}
+
 variable "github_runner_group" {
   description = "GitHub Actions runner group name passed to the Cloud Run service; blank disables --runnergroup"
   type        = string
