@@ -41,7 +41,8 @@ variable "region" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z][-a-z]+[0-9]$", var.region))
+    # [0-9]+ not [0-9]: regions numbered 10+ exist (e.g. europe-west10).
+    condition     = can(regex("^[a-z][-a-z]+[0-9]+$", var.region))
     error_message = "Invalid Google Cloud region name!"
   }
 
