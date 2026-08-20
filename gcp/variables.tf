@@ -41,7 +41,8 @@ variable "region" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[a-z][-a-z]+[0-9]$", var.region))
+    # [0-9]+ not [0-9]: regions numbered 10+ exist (e.g. europe-west10).
+    condition     = can(regex("^[a-z][-a-z]+[0-9]+$", var.region))
     error_message = "Invalid Google Cloud region name!"
   }
 
@@ -57,6 +58,27 @@ variable "zone" {
   validation {
     condition     = contains(["a", "b", "c", "d", "e", "f"], var.zone)
     error_message = "Zone suffix must be one of: a, b, c, d, e, f."
+  }
+}
+
+# Zone suffixes for runner VMs. Empty keeps the single-zone behavior of var.zone.
+# Multiple zones spread runner VMs so a Spot capacity crunch in one zone only
+# affects a fraction of jobs. All zones are within var.region (instance
+# templates are regional).
+variable "zones" {
+  description = "Google Cloud zone suffixes to spread GitHub Actions runner VMs across; empty uses var.zone only"
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for z in var.zones : contains(["a", "b", "c", "d", "e", "f"], z)])
+    error_message = "Zone suffixes must be one of: a, b, c, d, e, f."
+  }
+
+  validation {
+    condition     = length(var.zones) == length(distinct(var.zones))
+    error_message = "Zone suffixes must be unique."
   }
 }
 

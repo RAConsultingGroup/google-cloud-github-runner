@@ -3,6 +3,7 @@ Google Cloud Client for managing GCE instances.
 """
 import logging
 import os
+import random
 import re
 import uuid
 import shlex
@@ -18,8 +19,22 @@ class GCloudClient:
         """Initialize GCloudClient with project and zone configuration."""
         self.project_id = os.environ.get('GOOGLE_CLOUD_PROJECT')
         self.zone = os.environ.get('GOOGLE_CLOUD_ZONE', 'us-central1-a')
+        # GOOGLE_CLOUD_ZONES (comma-separated full zone names) spreads runner VMs across
+        # multiple zones so a Spot capacity crunch in one zone only affects a fraction of
+        # jobs. Unset it to keep the single-zone behavior of GOOGLE_CLOUD_ZONE.
+        zones_env = os.environ.get('GOOGLE_CLOUD_ZONES', '')
+        self.zones = [zone.strip() for zone in zones_env.split(',') if zone.strip()] or [self.zone]
         self.github_runner_group = os.environ.get('GITHUB_RUNNER_GROUP', '').strip()
-        self.region = '-'.join(self.zone.split('-')[:-1])
+        self.region = '-'.join(self.zones[0].split('-')[:-1])
+
+        cross_region_zones = [zone for zone in self.zones if not zone.startswith(f"{self.region}-")]
+        if cross_region_zones:
+            # Instance templates are regional, so an insert into another region's zone fails.
+            logger.warning(
+                "GOOGLE_CLOUD_ZONES entries %s are outside region %s; instance creation in them will fail.",
+                cross_region_zones,
+                self.region,
+            )
 
         if not self.project_id:
             logger.warning("GOOGLE_CLOUD_PROJECT not set. GCloudClient will not work correctly.")
@@ -101,9 +116,11 @@ class GCloudClient:
         else:
             instance_name = f"gcp-runner-{instance_uuid}"
 
+        zone = random.choice(self.zones)
         logger.info(
-            "Creating GCE instance %s with template %s, delivery_id: %s",
+            "Creating GCE instance %s in zone %s with template %s, delivery_id: %s",
             instance_name,
+            zone,
             instance_template_resource.self_link,
             delivery_id,
         )
@@ -150,7 +167,7 @@ class GCloudClient:
         # https://docs.cloud.google.com/python/docs/reference/compute/latest/google.cloud.compute_v1.types.InsertInstanceRequest
         request = compute_v1.InsertInstanceRequest(
             project=self.project_id,
-            zone=self.zone,
+            zone=zone,
             instance_resource=instance_resource,
             source_instance_template=instance_template_resource.self_link
         )
@@ -170,6 +187,29 @@ class GCloudClient:
             )
             raise
 
+    def _find_instance_zone(self, instance_name):
+        """
+        Locate the zone of an instance via an aggregated list.
+
+        Also finds instances in zones no longer configured (e.g. VMs created
+        before a zone/region change that complete after it).
+
+        Args:
+            instance_name (str): The name of the instance to locate.
+
+        Returns:
+            str or None: The zone name, or None if the instance was not found.
+        """
+        request = compute_v1.AggregatedListInstancesRequest(
+            project=self.project_id,
+            filter=f'name = "{instance_name}"',
+        )
+        for zone_path, scoped_list in self.instance_client.aggregated_list(request=request):
+            if getattr(scoped_list, 'instances', None):
+                # zone_path is e.g. "zones/europe-west10-a"
+                return zone_path.split('/')[-1]
+        return None
+
     def delete_runner_instance(self, instance_name, delivery_id=None):
         """
         Delete a GCE instance.
@@ -178,13 +218,28 @@ class GCloudClient:
             instance_name (str): The name of the instance to delete.
             delivery_id (str): The GitHub webhook delivery ID for log correlation.
         """
-        logger.info(
-            "Deleting GCE instance %s, delivery_id: %s", instance_name, delivery_id
-        )
         try:
+            if len(self.zones) == 1:
+                zone = self.zones[0]
+            else:
+                zone = self._find_instance_zone(instance_name)
+                if zone is None:
+                    logger.warning(
+                        "Instance %s not found in any zone; skipping deletion "
+                        "(already deleted?), delivery_id: %s",
+                        instance_name,
+                        delivery_id,
+                    )
+                    return
+            logger.info(
+                "Deleting GCE instance %s in zone %s, delivery_id: %s",
+                instance_name,
+                zone,
+                delivery_id,
+            )
             operation = self.instance_client.delete(
                 project=self.project_id,
-                zone=self.zone,
+                zone=zone,
                 instance=instance_name
             )
             logger.info(
