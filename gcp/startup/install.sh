@@ -166,12 +166,35 @@ done
 echo "Installing Yarn..."
 sudo npm install -g "yarn@$MY_YARN_VERSION"
 
-# Create runner user and add to docker und sudoers group
+# Create runner user, in the docker group only - not `google-sudoers`, which grants
+# unrestricted passwordless root to anything added to it.
 echo "Creating runner user..."
 if ! id -u runner >/dev/null 2>&1; then
 	sudo useradd -m runner
 fi
-sudo usermod -aG docker,google-sudoers runner
+sudo usermod -aG docker runner
+
+# Narrow, `runner`-named NOPASSWD grant in place of `google-sudoers`. Audited against
+# every ScaleraDjango CI workflow (2026-08-31): the only sudo caller anywhere in CI is
+# .github/actions/setup-cloud-sql, which apt-get installs postgresql-client-18 and
+# symlinks its binaries into /usr/local/bin. Everything else (Docker builds, tests)
+# goes through the docker group, not sudo. Binary-level, not argument-pinned - sudoers
+# matches command lines literally, so pinning exact args (the apt.postgresql.org.asc
+# URL, the pg version) would silently break the moment that composite action's
+# commands change without anyone touching this file. Narrow further only if that
+# action's own needs shrink.
+#
+# This also fixes a real breakage, not just a hardening exercise: openai/codex-action's
+# `drop-sudo` safety strategy scans /etc/sudoers.d for lines naming the `runner` user
+# and strips them, then verifies removal with `sudo -n true`. The old `%google-sudoers`
+# group grant had no `runner`-named line anywhere, so drop-sudo reported success while
+# sudo remained fully usable - this one is named, so it actually gets found and
+# stripped.
+cat <<'EOF' | sudo tee /etc/sudoers.d/runner-ci >/dev/null
+runner ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/curl, /usr/bin/tee, /usr/bin/apt-get, /usr/bin/ln
+EOF
+sudo chmod 0440 /etc/sudoers.d/runner-ci
+sudo visudo -c -f /etc/sudoers.d/runner-ci
 
 # Install GitHub Actions Runner
 echo "Installing GitHub Actions Runner..."
