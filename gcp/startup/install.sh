@@ -190,8 +190,17 @@ sudo usermod -aG docker runner
 # group grant had no `runner`-named line anywhere, so drop-sudo reported success while
 # sudo remained fully usable - this one is named, so it actually gets found and
 # stripped.
+#
+# Second line is for that same action's own bootstrap, not our CI scripts: before it
+# drops sudo, it locks down its Responses-API-proxy server-info file with
+# `sudo chmod 444`/`sudo chown root` on $CODEX_HOME/$CODEX_RUN_ID.json - both calls
+# happen inside the single `uses: openai/codex-action` step, before its internal
+# drop-sudo sub-step runs, so there's no workflow-level place to grant this instead.
+# Scoped to that one path rather than chmod/chown anywhere, which would be a much
+# bigger grant than this actually needs.
 cat <<'EOF' | sudo tee /etc/sudoers.d/runner-ci >/dev/null
 runner ALL=(root) NOPASSWD: /usr/bin/install, /usr/bin/curl, /usr/bin/tee, /usr/bin/apt-get, /usr/bin/ln
+runner ALL=(root) NOPASSWD: /usr/bin/chmod 444 /home/runner/.codex/*.json, /usr/bin/chown root /home/runner/.codex/*.json
 EOF
 sudo chmod 0440 /etc/sudoers.d/runner-ci
 sudo visudo -c -f /etc/sudoers.d/runner-ci
