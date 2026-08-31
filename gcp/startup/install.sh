@@ -14,10 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install Docker and GitHub Actions Runner for Linux with x64 or ARM64 CPU architecture
+# Install Docker, GitHub CLI and GitHub Actions Runner for Linux with x64 or ARM64 CPU architecture
 # https://github.com/actions/runner
 # https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#linux
 # https://docs.docker.com/engine/install/ubuntu/
+# https://github.com/cli/cli/blob/trunk/docs/install_linux.md
 
 # Exit on error, undefined variables, and pipe failures
 set -euo pipefail
@@ -33,12 +34,14 @@ readonly MY_RUNNER_DIR="/actions-runner"
 #   apt-cache madison docker-ce            (or the Packages index for the target release)
 #   npm view yarn versions
 #   https://github.com/actions/runner/releases
+#   curl -s https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages | grep -A1 '^Package: gh$'
 readonly MY_DOCKER_VERSION="5:29.7.2-1~ubuntu.24.04~noble"
 readonly MY_CONTAINERD_VERSION="2.3.3-1~ubuntu.24.04~noble"
 readonly MY_BUILDX_VERSION="0.36.1-1~ubuntu.24.04~noble"
 readonly MY_COMPOSE_VERSION="5.4.0-1~ubuntu.24.04~noble"
 readonly MY_YARN_VERSION="1.22.22"
 readonly MY_RUNNER_VERSION="2.336.0"
+readonly MY_GH_VERSION="2.98.0"
 
 # Prevent interactive prompts during package installation
 export DEBIAN_FRONTEND=noninteractive
@@ -133,6 +136,21 @@ sudo systemctl start docker.service
 # Fail the bake rather than ship an image that silently pulls straight from Docker Hub.
 if ! sudo docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q "mirror.gcr.io"; then
 	exit_with_failure "Docker did not pick up the mirror.gcr.io registry mirror"
+fi
+
+# Install GitHub CLI. GitHub-hosted runner images preinstall it and workflows use it
+# directly (gh api/gh pr/gh release) instead of raw curl+token calls; the actions/checkout
+# and friends do not.
+echo "Installing GitHub CLI..."
+sudo mkdir -p -m 755 "/etc/apt/keyrings"
+sudo curl -fsSL "https://cli.github.com/packages/githubcli-archive-keyring.gpg" -o "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
+sudo chmod go+r "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee "/etc/apt/sources.list.d/github-cli.list" >/dev/null
+sudo apt-get update -yq
+sudo apt-get install -y gh="$MY_GH_VERSION"
+
+if ! command -v gh >/dev/null 2>&1; then
+	exit_with_failure "GitHub CLI installation failed"
 fi
 
 # Pre-pull what CI needs on nearly every job: runners are one-job-and-destroyed, so no
