@@ -185,12 +185,26 @@ if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
 	echo "kernel.apparmor_restrict_unprivileged_userns=0" | sudo tee -a /etc/sysctl.d/99-bubblewrap-userns.conf >/dev/null
 fi
 
-# Create runner user and add to docker und sudoers group
+# Create runner user, in the docker group only - not `google-sudoers`.
 echo "Creating runner user..."
 if ! id -u runner >/dev/null 2>&1; then
 	sudo useradd -m runner
 fi
-sudo usermod -aG docker,google-sudoers runner
+sudo usermod -aG docker runner
+
+# Full passwordless sudo, same as `google-sudoers` granted, but as a NAMED sudoers.d
+# entry instead of a group grant. Runner VMs live in their own dedicated project
+# (scalera-ci) with nothing else on it, so narrowing this isn't a priority - what
+# matters is that openai/codex-action's `safety-strategy: drop-sudo` can actually find
+# and revoke it. Its cleanup (dropSudoWithPrivileges) strips sudoers.d lines whose
+# FIRST WHITESPACE-DELIMITED TOKEN matches the username - `%google-sudoers ALL=...`
+# starts with `%google-sudoers`, never matches `runner`, so drop-sudo silently declared
+# success while sudo stayed fully usable. A `runner ...` line matches and gets stripped.
+cat <<'EOF' | sudo tee /etc/sudoers.d/runner-ci >/dev/null
+runner ALL=(ALL) NOPASSWD:ALL
+EOF
+sudo chmod 0440 /etc/sudoers.d/runner-ci
+sudo visudo -c -f /etc/sudoers.d/runner-ci
 
 # Install GitHub Actions Runner
 echo "Installing GitHub Actions Runner..."
