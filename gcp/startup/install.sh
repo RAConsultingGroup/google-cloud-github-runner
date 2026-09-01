@@ -166,6 +166,25 @@ done
 echo "Installing Yarn..."
 sudo npm install -g "yarn@$MY_YARN_VERSION"
 
+# Bubblewrap (used by openai/codex-action's read-only/workspace-write sandboxes, and by
+# Codex's own default sandbox) needs unprivileged user namespaces to set up a network
+# namespace - without this it fails with `bwrap: loopback: Failed RTM_NEWADDR: Operation
+# not permitted`. openai/codex-action ships a setup step for exactly this
+# (kernel.unprivileged_userns_clone, and on Ubuntu 24.04+ the AppArmor-added
+# kernel.apparmor_restrict_unprivileged_userns), but that step is gated to
+# `runner.environment == 'github-hosted'` and explicitly skips self-hosted runners - so
+# self-hosted images have to bake it in themselves. Root-only, at bake time - the
+# `runner` user needs no sudo grant of its own for this, unlike CI's own sudo needs.
+echo "Enabling unprivileged user namespaces for bubblewrap..."
+if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+	sudo sysctl -w kernel.unprivileged_userns_clone=1
+	echo "kernel.unprivileged_userns_clone=1" | sudo tee /etc/sysctl.d/99-bubblewrap-userns.conf >/dev/null
+fi
+if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+	sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+	echo "kernel.apparmor_restrict_unprivileged_userns=0" | sudo tee -a /etc/sysctl.d/99-bubblewrap-userns.conf >/dev/null
+fi
+
 # Create runner user, in the docker group only - not `google-sudoers`.
 echo "Creating runner user..."
 if ! id -u runner >/dev/null 2>&1; then
