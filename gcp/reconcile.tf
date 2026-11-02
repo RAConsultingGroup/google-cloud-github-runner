@@ -12,13 +12,15 @@ resource "google_service_account" "reconcile" {
 }
 
 resource "google_cloud_scheduler_job" "reconcile" {
-  count    = var.github_runners_reconcile ? 1 : 0
-  project  = module.project.project_id
-  region   = var.region
+  count   = var.github_runners_reconcile ? 1 : 0
+  project = module.project.project_id
+  # Cloud Scheduler is not offered in every Compute region (e.g. europe-west10); it can call the
+  # manager in any region.
+  region   = coalesce(var.github_runners_reconcile_region, var.region)
   name     = "github-runners-reconcile"
   schedule = "* * * * *"
-  # The next run retries anything this one missed.
-  attempt_deadline = "60s"
+  # A run caps its own work well inside this; the next run retries anything this one missed.
+  attempt_deadline = "180s"
   retry_config {
     retry_count = 0
   }
