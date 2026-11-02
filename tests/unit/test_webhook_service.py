@@ -22,6 +22,7 @@ class TestWebhookService:
         payload = {
             'action': 'queued',
             'workflow_job': {
+                'id': 42,
                 'labels': ['gcp-ubuntu-24.04', 'linux']
             },
             'repository': {
@@ -42,6 +43,7 @@ class TestWebhookService:
             'gcp-ubuntu-24.04',
             'owner/repo',
             delivery_id="delivery-001",
+            job_id=42,
         )
 
     @patch('app.services.webhook_service.GCloudClient')
@@ -400,6 +402,7 @@ class TestWebhookServiceDeliveryIdLogging:
             "gcp-ubuntu-24.04",
             "owner/repo",
             delivery_id="fwd-create-001",
+            job_id=None,
         )
 
     @patch("app.services.webhook_service.GCloudClient")

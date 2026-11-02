@@ -544,3 +544,59 @@ class TestGCloudClientDeliveryIdLogging:
         assert any(
             "gce-delerr-delivery-001" in r.message for r in caplog.records
         ), "delivery_id not found in error log on instance deletion failure"
+
+
+def _client_with_template(mock_compute):
+    instance_client = MagicMock()
+    mock_compute.InstancesClient.return_value = instance_client
+    template = MagicMock()
+    template.name = 'gcp-ubuntu-24-04-12345678901234'
+    templates_client = MagicMock()
+    templates_client.list.return_value = [template]
+    mock_compute.RegionInstanceTemplatesClient.return_value = templates_client
+    return GCloudClient(), instance_client, templates_client
+
+
+class TestRunnerInstancesForReconcile:
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_vm_for_a_job_is_named_after_the_job(self, mock_compute, mock_env_vars):
+        client, _, _ = _client_with_template(mock_compute)
+        assert client.create_runner_instance('t', 'https://github.com/o/r', 'gcp-ubuntu-24.04', job_id=42) == 'gcp-runner-j42'
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_creating_an_existing_job_vm_again_succeeds_without_a_second_vm(self, mock_compute, mock_env_vars):
+        from google.api_core.exceptions import Conflict
+        client, instance_client, _ = _client_with_template(mock_compute)
+        instance_client.insert.side_effect = Conflict('already exists')
+        assert client.create_runner_instance('t', 'https://github.com/o/r', 'gcp-ubuntu-24.04', job_id=42) == 'gcp-runner-j42'
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_instance_templates_are_listed_once_for_repeated_creations(self, mock_compute, mock_env_vars):
+        client, instance_client, templates_client = _client_with_template(mock_compute)
+        for _ in range(3):
+            client.create_runner_instance('t', 'https://github.com/o/r', 'gcp-ubuntu-24.04')
+        templates_client.list.assert_called_once()
+        assert instance_client.insert.call_count == 3
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_runner_vms_are_listed_across_zones_with_label_and_age(self, mock_compute, mock_env_vars):
+        client, instance_client, _ = _client_with_template(mock_compute)
+        vm = MagicMock(creation_timestamp='2026-11-02T06:30:00.123-08:00', status='RUNNING', labels={'gha-runner': 'gcp-x'})
+        vm.name = 'gcp-runner-j1'
+        instance_client.aggregated_list.return_value = [
+            ('zones/europe-west10-a', MagicMock(instances=[])), ('zones/europe-west10-b', MagicMock(instances=[vm])),
+        ]
+        [listed] = client.list_runner_instances()
+        assert (listed.name, listed.zone, listed.runner_label, listed.status) == (
+            'gcp-runner-j1', 'europe-west10-b', 'gcp-x', 'RUNNING')
+        assert listed.created_at.isoformat() == '2026-11-02T06:30:00.123000-08:00'
+
+    @patch('app.clients.gcloud_client.compute_v1')
+    def test_deleting_with_a_known_zone_skips_the_zone_lookup(self, mock_compute, mock_env_vars, monkeypatch):
+        monkeypatch.setenv('GOOGLE_CLOUD_ZONES', 'europe-west10-a,europe-west10-b')
+        instance_client = MagicMock()
+        mock_compute.InstancesClient.return_value = instance_client
+        GCloudClient().delete_runner_instance('gcp-runner-j1', zone='europe-west10-b')
+        instance_client.aggregated_list.assert_not_called()
+        instance_client.delete.assert_called_once_with(
+            project='test-project', zone='europe-west10-b', instance='gcp-runner-j1')

@@ -87,6 +87,7 @@ class WebhookService:
                     repo_name,
                     org_name,
                     delivery_id=delivery_id,
+                    job_id=workflow_job.get('id'),
                 )
                 return {'action': 'created', 'runner_name': instance_name}
             else:
@@ -115,6 +116,7 @@ class WebhookService:
         repo_name,
         org_name,
         delivery_id=None,
+        job_id=None,
     ):
         """Handle queued workflow job.
 
@@ -134,6 +136,7 @@ class WebhookService:
                     template_name,
                     repo_name,
                     delivery_id=delivery_id,
+                    job_id=job_id,
                 )
             elif repo_name:
                 # Create GitHub Actions runner instance for repository
@@ -141,7 +144,7 @@ class WebhookService:
                     repo_name=repo_name, delivery_id=delivery_id
                 )
                 return self.gcloud_client.create_runner_instance(
-                    token, repo_url, template_name, repo_name, delivery_id=delivery_id
+                    token, repo_url, template_name, repo_name, delivery_id=delivery_id, job_id=job_id
                 )
             else:
                 logger.error(

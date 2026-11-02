@@ -1,5 +1,6 @@
 import pytest
 import logging
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from app.clients.github_client import GitHubClient
 
@@ -201,3 +202,57 @@ class TestGitHubClientDeliveryIdLogging:
         assert any(
             "gh-org-delivery-001" in r.message for r in caplog.records
         ), "delivery_id not found in log for org registration token"
+
+
+def _response(status_code=200, json_body=None, next_url=None):
+    response = MagicMock(status_code=status_code)
+    response.json.return_value = json_body
+    response.links = {'next': {'url': next_url}} if next_url else {}
+    return response
+
+
+class TestRunnerAndDeliveryApi:
+    @pytest.fixture(autouse=True)
+    def tokens(self, mock_env_vars):
+        with patch.object(GitHubClient, '_generate_jwt', return_value='jwt'), \
+                patch.object(GitHubClient, '_fetch_installation_access_token', return_value='install'):
+            yield
+
+    @patch('app.clients.github_client.requests.post')
+    def test_registration_token_is_reused_within_its_lifetime(self, mock_post):
+        mock_post.return_value = _response(json_body={'token': 'reg'})
+        client = GitHubClient()
+        assert [client.get_registration_token(org_name='acme') for _ in range(3)] == ['reg'] * 3
+        mock_post.assert_called_once()
+
+    @patch('app.clients.github_client.requests.get')
+    def test_org_runners_are_listed_across_pages(self, mock_get):
+        mock_get.side_effect = [
+            _response(json_body={'runners': [{'name': 'a'}]}, next_url='https://api.github.com/next'),
+            _response(json_body={'runners': [{'name': 'b'}]}),
+        ]
+        assert [r['name'] for r in GitHubClient().list_org_runners('acme')] == ['a', 'b']
+
+    @pytest.mark.parametrize('status_code, deleted', [(204, True), (404, True), (422, False)])
+    @patch('app.clients.github_client.requests.delete')
+    def test_deregistering_a_runner_reports_whether_it_is_gone(self, mock_delete, status_code, deleted):
+        mock_delete.return_value = _response(status_code)
+        assert GitHubClient().delete_org_runner('acme', 7) is deleted
+
+    @patch('app.clients.github_client.requests.get')
+    def test_failed_deliveries_stop_at_the_lookback(self, mock_get):
+        mock_get.side_effect = [
+            _response(json_body=[
+                {'id': 2, 'delivered_at': '2026-11-02T14:29:00Z'}, {'id': 1, 'delivered_at': '2026-11-02T14:00:00Z'},
+            ], next_url='https://api.github.com/next'),
+        ]
+        since = datetime(2026, 11, 2, 14, 10, tzinfo=timezone.utc)
+        assert [d['id'] for d in GitHubClient().list_failed_deliveries(since)] == [2]
+        assert mock_get.call_args.kwargs['params'] == {'per_page': 100, 'status': 'failure'}
+        mock_get.assert_called_once()
+
+    @patch('app.clients.github_client.requests.post')
+    def test_redelivery_posts_a_new_attempt(self, mock_post):
+        mock_post.return_value = _response(202)
+        GitHubClient().redeliver(99)
+        assert mock_post.call_args.args[0] == 'https://api.github.com/app/hook/deliveries/99/attempts'

@@ -1,12 +1,24 @@
 import pytest
 from unittest.mock import Mock, patch
 from app import create_app
+from app.clients.gcloud_client import clear_template_cache
+from app.clients.github_client import clear_token_cache
 
 
 @pytest.fixture(autouse=True)
 def setup_test_env(monkeypatch):
     """Set up test environment variables."""
     monkeypatch.setenv('GOOGLE_CLOUD_PROJECT', 'test-project')
+
+
+@pytest.fixture(autouse=True)
+def clear_client_caches():
+    """Module-level token and template caches must not leak between tests."""
+    clear_token_cache()
+    clear_template_cache()
+    yield
+    clear_token_cache()
+    clear_template_cache()
 
 
 @pytest.fixture

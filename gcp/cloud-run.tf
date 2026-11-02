@@ -38,6 +38,10 @@ module "cloud_run_github_runners_manager" {
         GOOGLE_CLOUD_ZONE    = "${var.region}-${var.zone}"
         GOOGLE_CLOUD_ZONES   = join(",", local.github_runner_zones)
         GITHUB_RUNNER_GROUP  = var.github_runner_group
+        GITHUB_RUNNER_ORG    = var.github_runner_org
+        WARM_POOL_SCHEDULE   = jsonencode(var.github_runners_warm_pool)
+        RECONCILE_INVOKER    = var.github_runners_reconcile ? google_service_account.reconcile[0].email : ""
+        RECONCILE_AUDIENCE   = local.reconcile_audience
       }
       env_from_key = {
         GITHUB_APP_ID = {
