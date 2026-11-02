@@ -18,9 +18,13 @@ logger = logging.getLogger(__name__)
 # Failed deliveries are retried once per run; the lookback bounds how long a job keeps being retried.
 DELIVERY_LOOKBACK = timedelta(minutes=20)
 # Retry a delivery only if its latest failure is recent, i.e. it was not already retried successfully.
-# Wider than the one-minute schedule so jitter never skips a retry; a duplicate is harmless because
+# Wide enough to survive several failed reconcile runs during a burst; a duplicate is harmless because
 # job VMs are named after the job.
-RETRY_WINDOW = timedelta(minutes=3)
+RETRY_WINDOW = timedelta(minutes=10)
+# Bounds on one run's work, so a run stays well inside the scheduler's attempt deadline; the next run
+# continues where this one stopped.
+MAX_REDELIVERIES_PER_RUN = 100
+MAX_DELETES_PER_RUN = 40
 # A VM whose runner is not online this long after creation failed to boot, or already ran its job.
 BOOT_GRACE = timedelta(minutes=10)
 # An idle runner this old was not wanted by the job it was created for: it is a spare.
@@ -71,6 +75,8 @@ class ReconcileService:
             latest = max(deliveries, key=lambda delivery: delivery['delivered_at'])
             if self.now - datetime.fromisoformat(latest['delivered_at']) > RETRY_WINDOW:
                 continue
+            if redelivered >= MAX_REDELIVERIES_PER_RUN:
+                break
             try:
                 self.github_client.redeliver(latest['id'])
                 redelivered += 1
@@ -82,7 +88,13 @@ class ReconcileService:
         """Delete broken or finished runner VMs, and idle spares beyond the warm pool. Returns deleted names."""
         deleted = set()
         for instance in instances:
+            if len(deleted) >= MAX_DELETES_PER_RUN:
+                return deleted
             runner = runners.get(instance.name)
+            if runner is None and self._age(instance) > BOOT_GRACE:
+                # The paged listing can miss a runner when others deregister mid-listing; never delete
+                # a VM on that alone.
+                runner = self.github_client.find_org_runner(self.org_name, instance.name)
             if (runner is None or runner['status'] != 'online') and self._age(instance) > BOOT_GRACE:
                 if self._delete(instance, runner):
                     deleted.add(instance.name)
@@ -96,6 +108,8 @@ class ReconcileService:
             if age < MAX_IDLE_AGE and kept[instance.runner_label] < targets.get(instance.runner_label, 0):
                 kept[instance.runner_label] += 1
                 continue
+            if len(deleted) >= MAX_DELETES_PER_RUN:
+                break
             if self._delete(instance, runners[instance.name]):
                 deleted.add(instance.name)
         return deleted

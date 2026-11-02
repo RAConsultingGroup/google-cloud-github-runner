@@ -159,6 +159,17 @@ class GitHubClient:
             params = None
         return runners
 
+    def find_org_runner(self, org_name, runner_name):
+        """Look up one runner by name, independent of the paged listing. Returns it, or None if not registered."""
+        # https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-an-organization
+        url = f"https://api.github.com/orgs/{org_name}/actions/runners"
+        response = requests.get(
+            url, headers=self._headers(self.get_installation_access_token()),
+            params={'name': runner_name}, timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return next((runner for runner in response.json()['runners'] if runner['name'] == runner_name), None)
+
     def delete_org_runner(self, org_name, runner_id):
         """Remove a runner registration. Returns False when GitHub refuses because the runner is running a job."""
         # https://docs.github.com/en/rest/actions/self-hosted-runners#delete-a-self-hosted-runner-from-an-organization

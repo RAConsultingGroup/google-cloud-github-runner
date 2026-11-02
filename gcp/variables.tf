@@ -92,6 +92,13 @@ variable "github_runners_reconcile" {
   default     = false
 }
 
+variable "github_runners_reconcile_region" {
+  description = "Region for the reconcile Cloud Scheduler job; blank uses var.region. Set it when var.region has no Cloud Scheduler"
+  type        = string
+  default     = ""
+  nullable    = false
+}
+
 variable "github_runner_org" {
   description = "GitHub organization whose runners the reconcile pass manages; required when github_runners_reconcile is true"
   type        = string

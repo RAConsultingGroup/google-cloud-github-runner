@@ -33,6 +33,7 @@ def clients(monkeypatch):
         github, gcloud = Mock(), Mock()
         github.list_failed_deliveries.return_value = []
         github.list_org_runners.return_value = []
+        github.find_org_runner.return_value = None
         github.delete_org_runner.return_value = True
         github.get_registration_token.return_value = 'reg-token'
         gcloud.list_runner_instances.return_value = []
@@ -55,9 +56,19 @@ class TestRedelivery:
 
     def test_delivery_whose_last_failure_is_old_is_not_retried(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [delivery(1, 'job-a', minutes_ago=10)]
+        github.list_failed_deliveries.return_value = [delivery(1, 'job-a', minutes_ago=11)]
         ReconcileService(now=NOW).run()
         github.redeliver.assert_not_called()
+
+    def test_failures_from_several_missed_runs_ago_are_still_retried(self, clients):
+        github, _ = clients
+        github.list_failed_deliveries.return_value = [delivery(1, 'job-a', minutes_ago=8)]
+        assert ReconcileService(now=NOW).run()['redelivered'] == 1
+
+    def test_one_run_redelivers_a_bounded_number_of_webhooks(self, clients):
+        github, _ = clients
+        github.list_failed_deliveries.return_value = [delivery(i, f'job-{i}', minutes_ago=1) for i in range(150)]
+        assert ReconcileService(now=NOW).run()['redelivered'] == 100
 
     def test_non_job_webhooks_are_not_retried(self, clients):
         github, _ = clients
@@ -79,6 +90,19 @@ class TestCleanup:
         gcloud.list_runner_instances.return_value = [instance('never-registered', 11), instance('booting', 2)]
         ReconcileService(now=NOW).run()
         assert deleted_vms(gcloud) == {'never-registered'}
+
+    def test_vm_whose_runner_the_paged_listing_missed_is_kept(self, clients):
+        github, gcloud = clients
+        gcloud.list_runner_instances.return_value = [instance('busy-but-unlisted', 30)]
+        github.find_org_runner.return_value = runner('busy-but-unlisted', busy=True)
+        ReconcileService(now=NOW).run()
+        github.find_org_runner.assert_called_once_with('acme', 'busy-but-unlisted')
+        assert deleted_vms(gcloud) == set()
+
+    def test_one_run_deletes_a_bounded_number_of_vms(self, clients):
+        _, gcloud = clients
+        gcloud.list_runner_instances.return_value = [instance(f'orphan-{i}', 30) for i in range(60)]
+        assert ReconcileService(now=NOW).run()['deleted'] == 40
 
     def test_offline_runner_is_deregistered_and_its_vm_deleted(self, clients):
         github, gcloud = clients

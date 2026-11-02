@@ -233,6 +233,17 @@ class TestRunnerAndDeliveryApi:
         ]
         assert [r['name'] for r in GitHubClient().list_org_runners('acme')] == ['a', 'b']
 
+    @patch('app.clients.github_client.requests.get')
+    def test_runner_lookup_by_name_matches_the_exact_name(self, mock_get):
+        mock_get.return_value = _response(json_body={'runners': [{'name': 'gcp-runner-j10'}, {'name': 'gcp-runner-j1'}]})
+        assert GitHubClient().find_org_runner('acme', 'gcp-runner-j1') == {'name': 'gcp-runner-j1'}
+        assert mock_get.call_args.kwargs['params'] == {'name': 'gcp-runner-j1'}
+
+    @patch('app.clients.github_client.requests.get')
+    def test_runner_lookup_by_name_returns_none_when_not_registered(self, mock_get):
+        mock_get.return_value = _response(json_body={'runners': []})
+        assert GitHubClient().find_org_runner('acme', 'gcp-runner-j1') is None
+
     @pytest.mark.parametrize('status_code, deleted', [(204, True), (404, True), (422, False)])
     @patch('app.clients.github_client.requests.delete')
     def test_deregistering_a_runner_reports_whether_it_is_gone(self, mock_delete, status_code, deleted):
