@@ -34,7 +34,8 @@ readonly MY_RUNNER_DIR="/actions-runner"
 #   apt-cache madison docker-ce            (or the Packages index for the target release)
 #   npm view yarn versions
 #   https://github.com/actions/runner/releases
-#   curl -s https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages | grep -A1 '^Package: gh$'
+#   https://github.com/cli/cli/releases
+#   versions-manifest.json in actions/python-versions, node-versions and go-versions (release tag)
 readonly MY_DOCKER_VERSION="5:29.7.2-1~ubuntu.24.04~noble"
 readonly MY_CONTAINERD_VERSION="2.3.3-1~ubuntu.24.04~noble"
 readonly MY_BUILDX_VERSION="0.36.1-1~ubuntu.24.04~noble"
@@ -42,6 +43,10 @@ readonly MY_COMPOSE_VERSION="5.4.0-1~ubuntu.24.04~noble"
 readonly MY_YARN_VERSION="1.22.22"
 readonly MY_RUNNER_VERSION="2.336.0"
 readonly MY_GH_VERSION="2.98.0"
+# Go follows ScaleraDjango's cornerstone/go.mod; a job asking for an unbaked version downloads it.
+readonly MY_PYTHON_RELEASE="3.12.16-40260402378"
+readonly MY_NODE_RELEASE="22.23.4-39619033003"
+readonly MY_GO_RELEASE="1.26.4-26891772857"
 
 # Prevent interactive prompts during package installation
 export DEBIAN_FRONTEND=noninteractive
@@ -142,12 +147,10 @@ fi
 # directly (gh api/gh pr/gh release) instead of raw curl+token calls; the actions/checkout
 # and friends do not.
 echo "Installing GitHub CLI..."
-sudo mkdir -p -m 755 "/etc/apt/keyrings"
-sudo curl -fsSL "https://cli.github.com/packages/githubcli-archive-keyring.gpg" -o "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
-sudo chmod go+r "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee "/etc/apt/sources.list.d/github-cli.list" >/dev/null
-sudo apt-get update -yq
-sudo apt-get install -y gh="$MY_GH_VERSION"
+# From the release .deb, not cli.github.com's apt repo: that repo carries only the latest
+# gh, so a pinned apt install fails the bake as soon as gh ships a new release.
+sudo curl -fsSL -o "/tmp/gh.deb" "https://github.com/cli/cli/releases/download/v${MY_GH_VERSION}/gh_${MY_GH_VERSION}_linux_$(dpkg --print-architecture).deb"
+sudo apt-get install -y "/tmp/gh.deb"
 
 if ! command -v gh >/dev/null 2>&1; then
 	exit_with_failure "GitHub CLI installation failed"
@@ -219,6 +222,27 @@ sudo tar xzf "actions-runner-linux-${MY_ARCH}-${MY_RUNNER_VERSION}.tar.gz"
 # Run the installation script
 sudo ./bin/installdependencies.sh
 echo "GitHub Actions Runner installed successfully"
+
+# Seed the runner's tool cache with the same tarballs actions/setup-python, setup-node and
+# setup-go download, so they resolve locally instead of fetching and extracting per job.
+echo "Seeding the actions/setup-* tool cache..."
+readonly MY_TOOL_CACHE="$MY_RUNNER_DIR/_work/_tool"
+seed_tool() {
+	local dir="$MY_TOOL_CACHE/$1/${2%-*}/$MY_ARCH"
+	sudo mkdir -p "$dir"
+	curl -fsSL "https://github.com/actions/$1-versions/releases/download/$2/$1-${2%-*}-linux-$MY_ARCH.tar.gz" | sudo tar xz -C "$dir"
+	sudo touch "$dir.complete"
+}
+seed_tool node "$MY_NODE_RELEASE"
+seed_tool go "$MY_GO_RELEASE"
+# The python-versions tarball installs itself: its setup.sh copies into the cache and adds
+# the symlinks and pip that setup-python expects. LD_LIBRARY_PATH as setup-python sets it:
+# without it the interpreter loads Ubuntu's own libpython3.12 and cannot find its pip.
+MY_PYTHON_TMP="$(mktemp -d)"
+curl -fsSL "https://github.com/actions/python-versions/releases/download/$MY_PYTHON_RELEASE/python-${MY_PYTHON_RELEASE%-*}-linux-$(lsb_release -rs)-$MY_ARCH.tar.gz" | tar xz -C "$MY_PYTHON_TMP"
+(cd "$MY_PYTHON_TMP" && sudo RUNNER_TOOL_CACHE="$MY_TOOL_CACHE" \
+	LD_LIBRARY_PATH="$MY_TOOL_CACHE/Python/${MY_PYTHON_RELEASE%-*}/$MY_ARCH/lib" bash ./setup.sh)
+sudo chown -R runner:runner "$MY_RUNNER_DIR/_work"
 
 # Cleanup: Clear package cache and temporary files
 echo "Cleaning up..."
