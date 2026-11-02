@@ -7,9 +7,34 @@ import random
 import re
 import uuid
 import shlex
+import threading
+import time
+from datetime import datetime
+from typing import NamedTuple
 import google.cloud.compute_v1 as compute_v1
+from google.api_core.exceptions import Conflict
 
 logger = logging.getLogger(__name__)
+
+# Listing instance templates on every queued-job webhook adds a GCE round trip to the hot path;
+# templates only change on terraform apply.
+TEMPLATE_CACHE_TTL = 10 * 60  # seconds
+_template_cache = {}
+_template_cache_lock = threading.Lock()
+
+
+def clear_template_cache():
+    """Drop cached instance templates (tests, and after a template change)."""
+    with _template_cache_lock:
+        _template_cache.clear()
+
+
+class RunnerInstance(NamedTuple):
+    name: str
+    zone: str
+    runner_label: str
+    created_at: datetime
+    status: str
 
 
 class GCloudClient:
@@ -46,6 +71,19 @@ class GCloudClient:
         self.instance_templates_client = compute_v1.RegionInstanceTemplatesClient()
 
     def _get_template_name(self, template_name):
+        """Cached wrapper around _find_template; a miss (None) is not cached."""
+        key = (self.project_id, self.region, template_name)
+        with _template_cache_lock:
+            cached = _template_cache.get(key)
+            if cached and cached[1] > time.time():
+                return cached[0]
+        template = self._find_template(template_name)
+        if template is not None:
+            with _template_cache_lock:
+                _template_cache[key] = (template, time.time() + TEMPLATE_CACHE_TTL)
+        return template
+
+    def _find_template(self, template_name):
         """
         Find a matching instance template by name prefix.
 
@@ -77,9 +115,13 @@ class GCloudClient:
         template_name,
         instance_label=None,
         delivery_id=None,
+        job_id=None,
     ):
         """
         Create a new GCE instance for a GitHub Actions runner.
+
+        With job_id the instance name is derived from the job, so creating it twice (a redelivered
+        webhook) is a no-op instead of a second VM.
 
         Args:
             registration_token (str): The GitHub Actions runner registration token.
@@ -87,6 +129,7 @@ class GCloudClient:
             template_name (str): The name of the instance template to use.
             instance_label (str): Label to add to the Instance for Cost Tracking.
             delivery_id (str): The GitHub webhook delivery ID for log correlation.
+            job_id (int): The GitHub workflow job ID the runner is created for, if any.
 
         Returns:
             str: The name of the created instance.
@@ -110,7 +153,7 @@ class GCloudClient:
 
         # Name must start with a lowercase letter followed by up to 62 lowercase letters,
         # numbers, or hyphens, and cannot end with a hyphen.
-        instance_uuid = uuid.uuid4().hex[:16]
+        instance_uuid = f"j{job_id}" if job_id is not None else uuid.uuid4().hex[:16]
         if instance_template_resource.name.startswith("dependabot"):
             instance_name = f"gcp-runner-dependabot-{instance_uuid}"
         else:
@@ -181,6 +224,9 @@ class GCloudClient:
                 delivery_id,
             )
             return instance_name
+        except Conflict:
+            logger.info("Instance %s already exists, delivery_id: %s", instance_name, delivery_id)
+            return instance_name
         except Exception as e:
             logger.error(
                 "Failed to create instance: %s, delivery_id: %s", e, delivery_id
@@ -210,18 +256,39 @@ class GCloudClient:
                 return zone_path.split('/')[-1]
         return None
 
-    def delete_runner_instance(self, instance_name, delivery_id=None):
+    def list_runner_instances(self):
+        """
+        List runner VMs created by this manager (instances carrying the gha-runner label), in every zone.
+
+        Returns:
+            list[RunnerInstance]: One entry per instance.
+        """
+        request = compute_v1.AggregatedListInstancesRequest(project=self.project_id, filter='labels.gha-runner:*')
+        instances = []
+        for zone_path, scoped_list in self.instance_client.aggregated_list(request=request):
+            for instance in getattr(scoped_list, 'instances', None) or []:
+                instances.append(RunnerInstance(
+                    name=instance.name,
+                    zone=zone_path.split('/')[-1],
+                    runner_label=instance.labels['gha-runner'],
+                    created_at=datetime.fromisoformat(instance.creation_timestamp),
+                    status=instance.status,
+                ))
+        return instances
+
+    def delete_runner_instance(self, instance_name, delivery_id=None, zone=None):
         """
         Delete a GCE instance.
 
         Args:
             instance_name (str): The name of the instance to delete.
             delivery_id (str): The GitHub webhook delivery ID for log correlation.
+            zone (str): The instance's zone, when already known; skips the zone lookup.
         """
         try:
-            if len(self.zones) == 1:
+            if zone is None and len(self.zones) == 1:
                 zone = self.zones[0]
-            else:
+            elif zone is None:
                 zone = self._find_instance_zone(instance_name)
                 if zone is None:
                     logger.warning(

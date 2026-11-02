@@ -11,6 +11,7 @@ variable "apis" {
     "logging.googleapis.com",
     "orgpolicy.googleapis.com",
     "run.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
   ]
@@ -79,6 +80,41 @@ variable "zones" {
   validation {
     condition     = length(var.zones) == length(distinct(var.zones))
     error_message = "Zone suffixes must be unique."
+  }
+}
+
+# Webhooks alone lose jobs: GitHub never retries a failed delivery (GCE quota error, saturated
+# manager). The reconciler, called by Cloud Scheduler every minute, retries those deliveries, keeps
+# the warm pool and deletes runner VMs nothing will use. Needs the app installed on an organization.
+variable "github_runners_reconcile" {
+  description = "Run the every-minute reconcile pass (webhook retries, warm pool, cleanup of unused runner VMs)"
+  type        = bool
+  default     = false
+}
+
+variable "github_runner_org" {
+  description = "GitHub organization whose runners the reconcile pass manages; required when github_runners_reconcile is true"
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = !var.github_runners_reconcile || var.github_runner_org != ""
+    error_message = "github_runner_org must be set when github_runners_reconcile is true."
+  }
+}
+
+# Idle runners kept ready per runs-on label, by UTC hour on weekdays (none on weekends), so jobs
+# skip the VM boot. Each idle runner costs a running VM; size it from queue data, not by guess.
+variable "github_runners_warm_pool" {
+  description = "Warm pool size per runner label: 24 hourly sizes (UTC, weekdays). Needs github_runners_reconcile."
+  type        = map(list(number))
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for sizes in values(var.github_runners_warm_pool) : length(sizes) == 24])
+    error_message = "Each github_runners_warm_pool entry needs exactly 24 hourly sizes."
   }
 }
 
