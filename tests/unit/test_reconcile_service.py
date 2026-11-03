@@ -19,6 +19,10 @@ def runner(name, status='online', busy=False, runner_id=None):
     return {'id': runner_id or hash(name) % 10000, 'name': name, 'status': status, 'busy': busy}
 
 
+def failures_only(failures, successes=()):
+    return lambda since, status: list(failures if status == 'failure' else successes)
+
+
 def delivery(delivery_id, guid, minutes_ago, event='workflow_job'):
     return {'id': delivery_id, 'guid': guid, 'event': event,
             'delivered_at': (NOW - timedelta(minutes=minutes_ago)).isoformat()}
@@ -31,7 +35,7 @@ def clients(monkeypatch):
     with patch('app.services.reconcile_service.GitHubClient') as github_class, \
             patch('app.services.reconcile_service.GCloudClient') as gcloud_class:
         github, gcloud = Mock(), Mock()
-        github.list_failed_deliveries.return_value = []
+        github.list_deliveries.side_effect = lambda since, status: []
         github.list_org_runners.return_value = []
         github.find_org_runner.return_value = None
         github.delete_org_runner.return_value = True
@@ -48,37 +52,51 @@ def deleted_vms(gcloud):
 class TestRedelivery:
     def test_recently_failed_job_webhook_is_redelivered_once_per_guid(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [
+        github.list_deliveries.side_effect = failures_only([
             delivery(1, 'job-a', minutes_ago=4), delivery(2, 'job-a', minutes_ago=1), delivery(3, 'job-b', minutes_ago=2),
-        ]
+        ])
         assert ReconcileService(now=NOW).run()['redelivered'] == 2
         assert sorted(c.args[0] for c in github.redeliver.call_args_list) == [2, 3]
 
     def test_delivery_whose_last_failure_is_old_is_not_retried(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [delivery(1, 'job-a', minutes_ago=11)]
+        github.list_deliveries.side_effect = failures_only([delivery(1, 'job-a', minutes_ago=11)])
         ReconcileService(now=NOW).run()
         github.redeliver.assert_not_called()
 
     def test_failures_from_several_missed_runs_ago_are_still_retried(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [delivery(1, 'job-a', minutes_ago=8)]
+        github.list_deliveries.side_effect = failures_only([delivery(1, 'job-a', minutes_ago=8)])
         assert ReconcileService(now=NOW).run()['redelivered'] == 1
 
     def test_one_run_redelivers_a_bounded_number_of_webhooks(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [delivery(i, f'job-{i}', minutes_ago=1) for i in range(150)]
+        github.list_deliveries.side_effect = failures_only([delivery(i, f'job-{i}', minutes_ago=1) for i in range(150)])
         assert ReconcileService(now=NOW).run()['redelivered'] == 100
+
+    def test_delivery_whose_redelivery_already_succeeded_is_not_sent_again(self, clients):
+        github, _ = clients
+        github.list_deliveries.side_effect = failures_only(
+            [delivery(1, 'job-a', minutes_ago=3), delivery(2, 'job-b', minutes_ago=3)],
+            successes=[delivery(10, 'job-a', minutes_ago=2), delivery(11, 'job-b', minutes_ago=4)],
+        )
+        assert ReconcileService(now=NOW).run()['redelivered'] == 1
+        github.redeliver.assert_called_once_with(2)
+
+    def test_successes_are_only_fetched_when_something_needs_a_retry(self, clients):
+        github, _ = clients
+        ReconcileService(now=NOW).run()
+        assert [c.kwargs['status'] for c in github.list_deliveries.call_args_list] == ['failure']
 
     def test_non_job_webhooks_are_not_retried(self, clients):
         github, _ = clients
-        github.list_failed_deliveries.return_value = [delivery(1, 'ping', minutes_ago=1, event='ping')]
+        github.list_deliveries.side_effect = failures_only([delivery(1, 'ping', minutes_ago=1, event='ping')])
         ReconcileService(now=NOW).run()
         github.redeliver.assert_not_called()
 
     def test_failed_redelivery_does_not_stop_the_run(self, clients):
         github, gcloud = clients
-        github.list_failed_deliveries.return_value = [delivery(1, 'a', 1), delivery(2, 'b', 1)]
+        github.list_deliveries.side_effect = failures_only([delivery(1, 'a', 1), delivery(2, 'b', 1)])
         github.redeliver.side_effect = [RuntimeError('boom'), None]
         assert ReconcileService(now=NOW).run()['redelivered'] == 1
         gcloud.list_runner_instances.assert_called_once()
