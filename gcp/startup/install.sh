@@ -41,7 +41,7 @@ readonly MY_CONTAINERD_VERSION="2.3.3-1~ubuntu.24.04~noble"
 readonly MY_BUILDX_VERSION="0.36.1-1~ubuntu.24.04~noble"
 readonly MY_COMPOSE_VERSION="5.4.0-1~ubuntu.24.04~noble"
 readonly MY_YARN_VERSION="1.22.22"
-readonly MY_RUNNER_VERSION="2.336.0"
+readonly MY_RUNNER_VERSION="2.338.0"
 readonly MY_GH_VERSION="2.98.0"
 # Go follows ScaleraDjango's cornerstone/go.mod; a job asking for an unbaked version downloads it.
 readonly MY_PYTHON_RELEASE="3.12.16-40260402378"
