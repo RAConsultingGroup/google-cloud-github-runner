@@ -68,6 +68,10 @@ module "cloud_run_github_runners_manager" {
     }
   }
   service_config = {
+    # One request per gunicorn thread (Dockerfile: --threads 8). With Cloud Run's default of 80, bursts
+    # queued inside an instance instead of scaling out, and webhooks past GitHub's 10s timeout count as
+    # failed deliveries.
+    max_concurrency = 8
     # Disable IAM permission check
     # There should be no requirement to pass the roles/run.invoker to the IAM block to enable public access.
     # This allows for the org policy domain restricted sharing org policy remain enabled.

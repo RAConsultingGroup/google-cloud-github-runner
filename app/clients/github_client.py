@@ -182,12 +182,12 @@ class GitHubClient:
         response.raise_for_status()
         return True
 
-    def list_failed_deliveries(self, since, max_pages=10):
-        """List failed app webhook deliveries delivered at or after since (aware datetime), newest first."""
+    def list_deliveries(self, since, status, max_pages=10):
+        """List app webhook deliveries with status 'success' or 'failure' delivered at or after since, newest first."""
         # https://docs.github.com/en/rest/apps/webhooks#list-deliveries-for-an-app-webhook
         headers = self._headers(self._generate_jwt())
         url = "https://api.github.com/app/hook/deliveries"
-        params = {'per_page': 100, 'status': 'failure'}
+        params = {'per_page': 100, 'status': status}
         deliveries = []
         for _ in range(max_pages):
             response = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)

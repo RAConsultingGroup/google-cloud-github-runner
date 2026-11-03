@@ -258,7 +258,7 @@ class TestRunnerAndDeliveryApi:
             ], next_url='https://api.github.com/next'),
         ]
         since = datetime(2026, 11, 2, 14, 10, tzinfo=timezone.utc)
-        assert [d['id'] for d in GitHubClient().list_failed_deliveries(since)] == [2]
+        assert [d['id'] for d in GitHubClient().list_deliveries(since, 'failure')] == [2]
         assert mock_get.call_args.kwargs['params'] == {'per_page': 100, 'status': 'failure'}
         mock_get.assert_called_once()
 

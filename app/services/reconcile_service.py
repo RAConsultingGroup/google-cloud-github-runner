@@ -33,6 +33,10 @@ SPARE_AGE = timedelta(minutes=5)
 MAX_IDLE_AGE = timedelta(hours=3)
 
 
+def delivery_succeeded_later(last_success, failure):
+    return last_success is not None and last_success > datetime.fromisoformat(failure['delivered_at'])
+
+
 class ReconcileService:
     """Retries failed webhooks, keeps the warm pool at its scheduled size and deletes unneeded runner VMs."""
 
@@ -65,15 +69,28 @@ class ReconcileService:
         return {label: sizes[self.now.hour] for label, sizes in self.warm_pool.items()}
 
     def redeliver_failed_webhooks(self):
-        """Redeliver workflow_job webhooks whose latest delivery failed recently."""
+        """Redeliver workflow_job webhooks whose latest delivery failed recently and has not succeeded since."""
         attempts = defaultdict(list)
-        for delivery in self.github_client.list_failed_deliveries(since=self.now - DELIVERY_LOOKBACK):
+        for delivery in self.github_client.list_deliveries(since=self.now - DELIVERY_LOOKBACK, status='failure'):
             if delivery['event'] == 'workflow_job':
                 attempts[delivery['guid']].append(delivery)
+        latest_failures = [
+            latest for latest in (max(deliveries, key=lambda delivery: delivery['delivered_at'])
+                                  for deliveries in attempts.values())
+            if self.now - datetime.fromisoformat(latest['delivered_at']) <= RETRY_WINDOW
+        ]
+        if not latest_failures:
+            return 0
+        # A redelivery that succeeded only shows up among successes; without this check a failed
+        # delivery would be redelivered on every run until it ages out of RETRY_WINDOW.
+        oldest = min(datetime.fromisoformat(latest['delivered_at']) for latest in latest_failures)
+        last_success = {}
+        for delivery in self.github_client.list_deliveries(since=oldest, status='success'):
+            at = datetime.fromisoformat(delivery['delivered_at'])
+            last_success[delivery['guid']] = max(last_success.get(delivery['guid'], at), at)
         redelivered = 0
-        for deliveries in attempts.values():
-            latest = max(deliveries, key=lambda delivery: delivery['delivered_at'])
-            if self.now - datetime.fromisoformat(latest['delivered_at']) > RETRY_WINDOW:
+        for latest in latest_failures:
+            if delivery_succeeded_later(last_success.get(latest['guid']), latest):
                 continue
             if redelivered >= MAX_REDELIVERIES_PER_RUN:
                 break
